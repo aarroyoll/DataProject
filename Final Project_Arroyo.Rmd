@@ -1,0 +1,296 @@
+---
+title: "The impact of gender on the prevalence and patterns of drunk driving among individuals who consume alcohol."
+author: "Anamarys Arroyo-Lloret"
+date: "Fall 2023"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(psych)
+library(Hmisc)
+library(tidyverse)
+library(haven)
+library(dplyr)
+library(writexl)
+library(lmtest)
+library(pwr)
+
+setwd("/Users/anabanana/Desktop/EPBI_8208/Final Project/Project Template")
+DrugData <- read_sav("/Users/anabanana/Desktop/EPBI_8208/Final Project/Data/NHSDA1996spss.sav")
+
+```
+
+
+## Introduction 
+
+  For this final project, my research question centers around exploring the impact of gender on the prevalence and patterns of drunk driving among individuals who consume alcohol. 
+  According to the National Highway Traffic Safety Administration (NHTSA), research shows that in the United States, approximately 37 people die each day due to driving while intoxicated. Additionally, about 31% of car crash deaths in the United States involve drunk drivers (NHTSA, n.d.). Studies from previous experiments show that alcohol impairs both men and women significantly, but women show greater impairment than men (Miller et al., 2009). Furthermore, men are more likely to be current drinkers and to engage in heavy drinking compared to women (Wilsnack et al., 2009). Schwartz & Beltz (2018) found that male intoxicated drivers outdo female rates; however, female rates of intoxicated drivers are on the rise.
+  I will be using data from the National Survey on Drug Use and Health (NSDUH) from 1996. The NSDUH is a series of surveys conducted to measure prevalence and correlated of substance abuse in the United States. The population is individuals over the age of 12, active-duty military, and individuals that are homeless in the United States. The NSDUH covers substance use, mental health, alcohol, tobacco, and other health issues. The variables in the dataset are of the types categorical and continuous. The units used for measurement are length in inches, weight in pounds, and counts.  
+  I began manipulating the data by creating a smaller subset (DrugData2) and exporting it for analysis. Missing codes in alcohol and drunk driving-related variables were addressed by replacing them with NA and replacing certain codes like "did not drive drunk" or "did not use alcohol in the past 30 days" to 0. Additionally, the dataset was segmented into alcohol users and non-alcohol users based on drink counts, and a new categorical variable categorizing drinkers into three categories was created based on the number of drinks consumed.
+
+
+```{r include=FALSE}
+
+# Overview of the data
+
+# sample size -- use number of rows in the dataset to get a number of subjects
+nrow(DrugData)
+
+# number of observations and variables
+dim(DrugData)
+
+# number of missing values in the dataset
+sum(is.na(DrugData))
+
+# % of missing data
+(colMeans(is.na(DrugData)))*100
+```
+
+``` {r include=FALSE}
+# The dataset is incredibly large so I am creating a subset 
+
+DrugData2 <- subset(
+  DrugData,
+  select = c("IRAGE", "IRSEX", "IRRACE", "IREDUC", "IRALCFQ", "CIGFLAG", "ALCFLAG", 
+             "WORKSTAT", "HTININCH", "POUNDS", "HEALTH", "DRUNKYR", "ALCTRY", "CIGTRY", 
+             "VALYRFRQ", "VAL30USE", "NODR30A")
+)
+
+# downloading a copy of the subset 
+library(writexl)
+write_xlsx(DrugData2, path = "/Users/anabanana/Desktop/EPBI_8208/Final Project/Data/DrugData_Subset.xlsx")
+
+# cleaning/handling missing data and changing some values to zero
+
+# 85, 94, 95, 98 are missing
+DrugData2$NODR30A[DrugData2$NODR30A %in% c(85, 94, 95, 98)] <- NA
+
+# 83 and 93 both mean "did not use alcohol in past 30 days"
+
+DrugData2$NODR30A[DrugData2$NODR30A %in% c(83, 93)] <- 0
+
+# 89, 96, 97, 98, 99 are missing
+DrugData2$VALYRFRQ[DrugData2$VALYRFRQ %in% c(89, 96, 97, 98, 99)] <- NA
+
+# 85, 89, 94, 95, 97, 98, 99 are missing
+DrugData2$VAL30USE[DrugData2$VAL30USE %in% c(85, 89, 94, 95, 97, 98, 99)] <- NA
+
+# 83 and 93 both mean "did not drive drunk"
+
+DrugData2$VAL30USE[DrugData2$VAL30USE %in% c(83, 93)] <- 0
+
+# putting VALYRFRQ into categories
+
+# VALYRFRQ values correspond to categories. I labeled them so that it is easier to understand
+label_VALYRFRQ <- c(
+  "More than 300 days",
+  "201 to 300 days",
+  "101 to 200 days",
+  "51 to 100 days",
+  "25 to 50 days",
+  "12 to 24 days",
+  "6 to 11 days",
+  "3 to 5 days",
+  "1 to 2 days"
+)
+
+# Converting it into a factor
+DrugData2$VALYRFRQ <- factor(DrugData2$VALYRFRQ, levels = 1:9, labels = label_VALYRFRQ)
+
+# segmenting for upcoming analysis  -- easier to deal with the variable that I want to use if I segment
+
+# Segmenting based on alcohol use
+alcuser <- subset(DrugData2, NODR30A != 81 & !is.na(NODR30A)) #new subset of only alcohol user
+nonalcuser <- subset(DrugData2, NODR30A == 81 | is.na(NODR30A)) #new subset of only non-drinkers
+
+# Creating categories based on number of drinks -- used information from NIAAA as a guide for drinking 
+DrugData2$category <- cut(DrugData2$NODR30A,
+                          breaks = c(0, 2, 5, 50),
+                          labels = c("Light Drinker", "Moderate Drinker", "Heavy Drinker"),
+                          include.lowest = TRUE)
+
+```
+
+## Data Exploration and Visualization
+
+**Days Driven Drunk in the Past 30 Days by Sex**
+
+Using 'ggplot', I created a bar plot to show the distribution of days driven drunk (VALYRFRQ) categorized by sex (IRSEX). Before creating the plot, I segmented the VALYRFRQ variable and labeled the values. I used the "stack" position in the geom_bar to stack the gender categories. I opted for the light theme (theme_light) an used the scale_fill_manual to differentiate between male and female.
+
+```{r echo=FALSE}
+# Boxplot looking at days driven while drunk and sex
+
+# had to turn into a factor because it wouldn't work
+DrugData2$IRSEX <- factor(DrugData2$IRSEX, levels = c("1", "2"))
+# 1 = male, 2 = female
+ggplot(DrugData2, aes(x = IRSEX, y = VAL30USE, fill = IRSEX)) +
+  geom_boxplot() +
+  labs(title = "Days Driven Drunk in the Past 30 Days by Gender", x = "Sex", y = "Days Driven Drunk") + # title and labels
+  scale_x_discrete(labels = c("Male", "Female")) # show male & female instead of 1 and 2
+```
+
+
+**Distribution of Days Driven Drunk by Sex**
+
+The chart was made using ggplot, showcasing the number of days individuals drove drunk in the past year grouped by gender. It involved arranging bars using geom_bar() to display the distribution, with different colors representing males and females. 
+
+```{r echo=FALSE}
+# Histogram
+# number of days driven drunk in the past 12 months by sex
+
+ggplot(DrugData2, aes(x = VALYRFRQ, fill = factor(IRSEX))) +
+  geom_bar(position = "stack") + # changed the position 
+  labs(title = "Distribution of Days Driven Drunk by Sex", #title
+       x = "Days Driven Drunk", # x axis label
+       y = "Count") + # y axis label
+  scale_fill_manual(name = "Sex",
+                    values = c("1" = "lightblue", "2" = "lightpink"), # changed colors
+                    labels = c("1" = "Male", "2" = "Female")) + # labeled male and female to remove 1 and 2
+  theme_light()
+
+```
+
+
+### Descriptive Statistics
+
+
+**Psychometric Analysis**
+```{r echo=FALSE}
+# Descriptive statistics 
+# PSYCH
+
+psych<- psych::describe(DrugData2)
+psych
+```
+
+**Relationship Between Age and Drunk Driving Frequency: Correlation Matrix Analysis**
+
+I analyzed the correlation coefficient between the number of days driven drunk within the last 30 days and age. There was weak correlation, showing very little association.
+
+```{r echo=FALSE}
+
+# correlation matrix for drunk driving days (1-30) and age
+
+DrugData2$VAL30USE <- as.numeric(as_factor(DrugData2$VAL30USE)) # had to change to numeric 
+
+correlation_matrix <- cor(DrugData2[, c("VAL30USE", "IRAGE")], use = "pairwise.complete.obs") # remove missing values
+correlation_matrix
+```
+
+**Demographics and Alcohol Use: Contingency Analysis**
+``` {r include = FALSE}
+DrugData2 <- DrugData2 %>%
+  mutate(
+    IRRACE = case_when(
+      IRRACE == 1 ~ "American Indian or Alaskan Native",
+      IRRACE == 2 ~ "Asian",
+      IRRACE == 3 ~ "Black",
+      IRRACE == 4 ~ "White",
+      TRUE ~ as.character(IRRACE)  
+    )
+  )
+
+keep <- c("White", "Black", "Asian", "American Indian or Alaskan Native")
+DrugData2$IRRACE <- ifelse(DrugData2$IRRACE %in% keep, DrugData2$IRRACE)
+
+
+DrugData2$ALCFLAG <- ifelse(DrugData2$ALCFLAG == 0, "Never Used", "Ever Used")
+
+```
+``` {r echo = FALSE}
+catvars <- dplyr::select(DrugData2, ALCFLAG, IRSEX, IRRACE)
+ftable(catvars)
+```
+
+## Statistical analysis
+
+### Linear Regression Analysis: Alcohol Consumption and Gender Across Drinking Levels
+
+I developed three linear models corresponding to light drinkers, moderate drinkers, and heavy drinkers. I decided on a segmented analysis approach. First, I segmented the variable NODR30A into two groups: alcohol users and non-alcohol users. Then, within the alcohol user group, I further segmented the individuals into three drinking categories based on criteria from the National Institute on Alcohol Abuse and Alcoholism (light=0-2 drinks, moderate=2-5 drinks, heavy=5+ drinks). Age and sex were included as factors in the linear models. I had to code the sex variable as a factor to facilitate the analysis.
+
+**Light Drinkers:**
+
+The model revealed a statistically significant relationship between the number of drinks per day in a 30-day period and age and sex. It indicated that individuals of older age and females showed to have fewer alcoholic drinks compared to men. However, the model only explained a small portion of the variance (Adjusted R-Squared = 0.01163), which suggests that there might be other outside factors influencing this relationship.
+
+```{r echo=FALSE}
+# Light Drinkers 
+
+light <- subset(DrugData2, category == "Light Drinker")  # New subset of only light drinkers
+
+light$IRSEX <- factor(light$IRSEX, levels = c("1", "2")) # factoring sex
+
+lm_light <- lm(NODR30A ~ IRAGE + IRSEX, data = light) # linear model for light
+summary(lm_light)
+
+```
+
+**Moderate Drinkers:**
+
+Results for the moderate drinkers group were similar to that of the light drinkers. Older individuals and females showed less alcoholic drink consumption compared to men. Again, the Adjusted R-Squared (0.008077) suggests an external influence. 
+
+```{r echo=FALSE}
+# Moderate Drinkers
+moderate <- subset(DrugData2, category == "Moderate Drinker")   #new subset of only moderate drinkers
+
+moderate$IRSEX <- factor(moderate$IRSEX, levels = c("1", "2")) # factoring sex
+
+lm_mod <- lm(NODR30A ~ IRAGE + IRSEX, data = moderate) # linear model for moderate
+summary(lm_mod)
+```
+
+**Heavy Drinkers:**
+
+There was minimal association between age and heavy drinking. In terms of gender, females had fewer drinks per day compared to men. Again, the adjusted R-squared was low, measuring at 0.006285.
+
+```{r echo=FALSE}
+# Heavy Drinkers
+heavy <- subset(DrugData2, category == "Heavy Drinker")  #new subset of only heavy drinkers
+
+heavy$IRSEX <- factor(heavy$IRSEX, levels = c("1", "2")) # factoring sex
+
+lm_heavy <- lm(NODR30A ~ IRAGE + IRSEX, data = heavy) # linear model for heavy
+summary(lm_heavy)
+```
+
+**Comparison of Gender Distribution Between Alcohol Users and Non-Alcohol Users**
+
+I compared the proportion of males and females among alcohol users and non-alcohol users by categorizing the groups based on their alcohol use. I conducted the analysis using a table. Among alcohol users, females accounted for 51.04%, slightly higher than males at 48.96%. For non-alcohol users, females constituted 62.12% while males made up 37.88%. Non-alcohol users were more likely to be female compared to males. However, there wasn't a significant difference observed among alcohol users.
+
+```{r echo=FALSE}
+# No Alcohol Users vs Alcohol Users
+
+sex_alcuser <- table(alcuser$IRSEX) / sum(table(alcuser$IRSEX))
+sex_nonalcuser <- table(nonalcuser$IRSEX) / sum(table(nonalcuser$IRSEX))
+
+print(sex_alcuser)
+print(sex_nonalcuser)
+```
+
+## Conclusions 
+
+The analysis aimed to examine the influence of gender on drunk driving patterns among U.S. residents, utilizing the National Survey on Drug Use and Health Dataset from 1996. The findings indicate a weak correlation between age and the frequency of drunk driving incidents within the last 30 days, suggesting minimal association. Additionally, a segmented analysis across three drinking levels (light, moderate, and heavy) showed that older individuals and females tend to consume fewer alcoholic drinks compared to men. However, the consistently low adjusted R-squared values across all linear regression models imply possible influence from other factors on these relationships. Exploring these additional factors could be interesting.
+
+One of the main weaknesses lies in excluding those potentially influential variables related to drinking levels. Moreover, the dataset's age, from 1996, presents a limitation since trends might differ. It would have been beneficial to include variables such as education, socioeconomic status, income, and other substance uses like cigarettes or drugs for a more comprehensive analysis.
+
+
+## References
+
+Miller, M. A., Weafer, J., & Fillmore, M. T. (2009). Gender Differences in Alcohol Impairment 
+  of Simulated Driving Performance and Driving-Related Skills. Alcohol & Alcoholism. 
+  44(6), 586-593. doi: 10.1093/alcalc/agp051 
+  
+National Highway Traffic Safety Administration (NHTSA). (n.d.). Drunk driving. 
+  https://www.nhtsa.gov/risky-driving/drunk-driving
+  
+National Institute on Alcohol Abuse and Alcoholism. (n.d.). Alcohol's Effects on Health. Retrieved from            https://www.niaaa.nih.gov/alcohol-health/overview-alcohol-consumption/moderate-binge-drinking
+
+Schwartz, J., & Beltz, L. (2018). Trends in female and male drunken driving prevalence over 
+  thirty years: Triangulating diverse sources of evidence (1985–2015). 
+  Addictive Behaviors. 84, 7-12. https://doi.org/10.1016/j.addbeh.2018.03.024 
+  
+Wilsnack, R. W., Wilsnack, S. C., Kristjanson, A. F., Vogeltanz-Holm, N. D., & Gmel, G. (2009). 
+  Gender and alcohol consumption: patterns from the multinational genacis project. 
+  Addiction. 104(9), 1487-1500. doi:10.1111/j.1360-0443.2009.02696.x.
+
